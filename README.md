@@ -31,6 +31,7 @@ Of these, not all of them are initially in scope. Given the index of error types
 1. Untranslate ✅
 1. Style ❌
 1. Contraction ✅
+1. Q&A ❌
 
 \*: The source text will need to be annotated to declare acceptable deviations. For example, if "ballpark" and "ball park" are equally acceptable, that will be part of the source text and not part of this library.
 
