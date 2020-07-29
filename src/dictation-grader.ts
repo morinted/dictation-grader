@@ -5,6 +5,7 @@ import 'core-js/fn/array/filter'
 import 'core-js/fn/string/ends-with'
 import 'core-js/fn/string/starts-with'
 import 'core-js/es/string/split'
+import zip from 'lodash/zip'
 
 const tokenizer = /(?: |([.?:,!";()])|(\{.*\}))/
 
@@ -109,6 +110,42 @@ const contractionLength = (
 }
 
 type OptionalError = Record<string, unknown> | null
+
+const isOptional = (token: string | undefined) =>
+  !!token && token.startsWith('{')
+
+const mergeErrors = (
+  sourceTokens: string[],
+  sourceIndex: number,
+  foundSourceIndex: number,
+  attemptTokens: string[],
+  attemptIndex: number,
+  foundNumberIndex: number
+): [TranscriptionError[], number, number] => {
+  const missedSourceTokens = sourceTokens
+    .slice(sourceIndex, sourceIndex + foundSourceIndex)
+    .map((token, index) => ({ token, index: index + sourceIndex }))
+    .filter(({ token }) => !isOptional(token))
+  const badAttempts = attemptTokens.slice(
+    attemptIndex,
+    attemptIndex + foundNumberIndex
+  )
+  const mistakes = zip(missedSourceTokens, badAttempts)
+  console.log(mistakes)
+  return [
+    mistakes.map(([source, attempt], index) =>
+      makeError(
+        source && attempt ? 'incorrect' : source ? 'dropped' : 'unexpected',
+        sourceTokens,
+        source ? source.index + index : null,
+        attemptTokens,
+        attempt ? attemptIndex + index : null
+      )
+    ),
+    foundSourceIndex,
+    foundNumberIndex
+  ]
+}
 
 const findMatch = (
   sourceTokens: string[],
@@ -345,7 +382,7 @@ const countErrors = (source: string) => (
     }
 
     const [newErrors, sourceIndexIncrease, attemptIndexIncrease] = ((): [
-      Record<string, unknown>[],
+      TranscriptionError[],
       number,
       number
     ] => {
@@ -356,6 +393,9 @@ const countErrors = (source: string) => (
       for (let i = 1; i < maxLookahead; i++) {
         // Dropped words
         for (let j = 0; j < i; j++) {
+          if (isOptional(sourceTokens[sourceIndex + i])) {
+            break
+          }
           if (
             findMatch(
               sourceTokens,
@@ -364,30 +404,14 @@ const countErrors = (source: string) => (
               attemptIndex + j
             )[0]
           ) {
-            return [
-              [
-                ...Array.from({ length: j }, (valueIgnored, wordIndex) =>
-                  makeError(
-                    'incorrect',
-                    sourceTokens,
-                    sourceIndex + wordIndex,
-                    attemptTokens,
-                    attemptIndex + wordIndex
-                  )
-                ),
-                ...Array.from({ length: i - j }, (valueIgnored, wordIndex) =>
-                  makeError(
-                    'dropped',
-                    sourceTokens,
-                    sourceIndex + wordIndex + j,
-                    attemptTokens,
-                    null
-                  )
-                )
-              ],
+            return mergeErrors(
+              sourceTokens,
+              sourceIndex,
               i,
+              attemptTokens,
+              attemptIndex,
               j
-            ]
+            )
           }
         }
 
@@ -401,30 +425,14 @@ const countErrors = (source: string) => (
               attemptIndex + i
             )[0]
           ) {
-            return [
-              [
-                ...Array.from({ length: j }, (valueIgnored, wordIndex) =>
-                  makeError(
-                    'incorrect',
-                    sourceTokens,
-                    sourceIndex + wordIndex,
-                    attemptTokens,
-                    attemptIndex + wordIndex
-                  )
-                ),
-                ...Array.from({ length: i - j }, (valueIgnored, wordIndex) =>
-                  makeError(
-                    'unexpected',
-                    sourceTokens,
-                    null,
-                    attemptTokens,
-                    attemptIndex + wordIndex + j
-                  )
-                )
-              ],
+            return mergeErrors(
+              sourceTokens,
+              sourceIndex,
               j,
+              attemptTokens,
+              attemptIndex,
               i
-            ]
+            )
           }
         }
 
@@ -437,19 +445,14 @@ const countErrors = (source: string) => (
             attemptIndex + i
           )[0]
         ) {
-          return [
-            Array.from({ length: i }, (valueIgnored, wordIndex) =>
-              makeError(
-                'incorrect',
-                sourceTokens,
-                sourceIndex + wordIndex,
-                attemptTokens,
-                attemptIndex + wordIndex
-              )
-            ),
+          return mergeErrors(
+            sourceTokens,
+            sourceIndex,
             i,
+            attemptTokens,
+            attemptIndex,
             i
-          ]
+          )
         }
       }
       /* istanbul ignore next */
