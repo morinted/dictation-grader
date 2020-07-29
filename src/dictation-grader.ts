@@ -7,17 +7,14 @@ import 'core-js/fn/string/starts-with'
 import 'core-js/es/string/split'
 import zip from 'lodash/zip'
 
-const tokenizer = /(?: |([.?:,!";()])|(\{.*\}))/
+const tokenizer = /(?: ((?:[A-Z]\.)+)| |([.?:,!";()])|(\{.*?\}))/
 
-type TranscriptionError = {
-  type: TranscriptionErrorKind
-  expected: string | null
-  actual: string | null
-  sourceIndex: number | null
-  attemptIndex: number | null
+export type TranscriptionMatch = {
+  expected: string
+  actual: string
 }
 
-type TranscriptionErrorKind =
+export type TranscriptionErrorKind =
   | 'incorrect'
   | 'dropped'
   | 'unexpected'
@@ -28,6 +25,20 @@ type TranscriptionErrorKind =
   | 'capitalization'
   | 'expanded contraction'
   | 'collapsed contraction'
+
+export type TranscriptionError = {
+  type: TranscriptionErrorKind
+  expected: string | null
+  actual: string | null
+  sourceIndex: number | null
+  attemptIndex: number | null
+}
+
+export type Transcription = Array<TranscriptionMatch | TranscriptionError>
+
+const makeMatch = (expected: string, actual?: string): TranscriptionMatch => {
+  return { expected, actual: actual === undefined ? expected : actual }
+}
 
 const makeError = (
   type: TranscriptionErrorKind,
@@ -109,10 +120,8 @@ const contractionLength = (
   return 0
 }
 
-type OptionalError = Record<string, unknown> | null
-
 const isOptional = (token: string | undefined) =>
-  !!token && token.startsWith('{')
+  !!token && token.startsWith('{') && !token.includes('|')
 
 const mergeErrors = (
   sourceTokens: string[],
@@ -131,7 +140,7 @@ const mergeErrors = (
     attemptIndex + foundNumberIndex
   )
   const mistakes = zip(missedSourceTokens, badAttempts)
-  console.log(mistakes)
+
   return [
     mistakes.map(([source, attempt], index) =>
       makeError(
@@ -152,10 +161,16 @@ const findMatch = (
   sourceIndex: number,
   attemptTokens: string[],
   attemptIndex: number,
-  ignoreOptionals = false
+  ignoreOptionals = false,
+  overwriteCurrentSource?: string
   // Matched, error, source increase, attempt increase
-): [boolean, OptionalError, number, number] => {
-  const currentSource = sourceTokens[sourceIndex]
+): [
+  boolean,
+  TranscriptionError | TranscriptionMatch | null,
+  number,
+  number
+] => {
+  const currentSource = overwriteCurrentSource || sourceTokens[sourceIndex]
   const currentAttempt = attemptTokens[attemptIndex]
 
   if (currentSource === undefined && currentAttempt === undefined)
@@ -166,22 +181,40 @@ const findMatch = (
   if (currentSource.startsWith('{')) {
     const optional = currentSource.substring(1, currentSource.length - 1)
 
+    const options = optional.split('|')
+    if (options.length > 1) {
+      for (const option of options) {
+        const results = findMatch(
+          sourceTokens,
+          sourceIndex,
+          attemptTokens,
+          attemptIndex,
+          true,
+          option
+        )
+        if (results[0]) {
+          return results
+        }
+      }
+      return [false, null, 0, 0]
+    }
+
     if (optional === currentAttempt) {
-      return [true, null, 1, 1]
+      return [true, makeMatch(optional), 1, 1]
     }
     return [ignoreOptionals, null, 1, 0]
   }
 
   // Same word
   if (currentSource === currentAttempt) {
-    return [true, null, 1, 1]
+    return [true, makeMatch(currentSource), 1, 1]
   }
 
   // Optional space
   if (sourceTokens[sourceIndex + 1] === '{ }') {
     const wholeWord = `${currentSource}${sourceTokens[sourceIndex + 2]}`
     if (wholeWord === currentAttempt) {
-      return [true, null, 3, 1]
+      return [true, makeMatch(currentAttempt), 3, 1]
     }
   }
 
@@ -192,10 +225,13 @@ const findMatch = (
   ) {
     return [
       true,
-      {
-        type: 'transposition',
-        sourceIndex
-      },
+      makeError(
+        'transposition',
+        sourceTokens,
+        sourceIndex,
+        attemptTokens,
+        attemptIndex
+      ),
       2,
       2
     ]
@@ -232,7 +268,7 @@ const findMatch = (
           capitalizingPunctuation.test(attemptTokens[attemptIndex - 1])))
     ) {
       // Don't penalize wrong case if we already penalized for using a period.
-      return [true, null, 1, 1]
+      return [true, makeMatch(currentSource, currentAttempt), 1, 1]
     }
     return [
       true,
@@ -323,146 +359,242 @@ const findMatch = (
   return [false, null, 0, 0]
 }
 
-const countErrors = (source: string) => (
-  attempt: string
-): Record<string, unknown>[] => {
-  const sourceTokens = tokenizeString(source)
-  const attemptTokens = tokenizeString(attempt)
-  const errors = []
-  let sourceIndex = 0
-  let attemptIndex = 0
-  while (
-    sourceIndex < sourceTokens.length ||
-    attemptIndex < attemptTokens.length
+class Grade {
+  constructor(
+    dictationText: DictationText,
+    results: Transcription,
+    attempt: string
   ) {
-    const currentSource = sourceTokens[sourceIndex]
-    const currentAttempt = attemptTokens[attemptIndex]
-
-    if (currentSource === undefined) {
-      errors.push(
-        makeError(
-          'unexpected',
-          sourceTokens,
-          sourceIndex,
-          attemptTokens,
-          attemptIndex
-        )
-      )
-      attemptIndex += 1
-      continue
-    }
-    if (currentAttempt === undefined) {
-      errors.push(
-        makeError(
-          'dropped',
-          sourceTokens,
-          sourceIndex,
-          attemptTokens,
-          attemptIndex
-        )
-      )
-      sourceIndex += 1
-      continue
-    }
-
-    const [
-      matched,
-      matchError,
-      matchSourceIncrease,
-      matchAttemptIncrease
-    ] = findMatch(sourceTokens, sourceIndex, attemptTokens, attemptIndex, true)
-
-    if (matched) {
-      if (matchError) {
-        errors.push(matchError)
-      }
-      sourceIndex += matchSourceIncrease
-      attemptIndex += matchAttemptIncrease
-      continue
-    }
-
-    const [newErrors, sourceIndexIncrease, attemptIndexIncrease] = ((): [
-      TranscriptionError[],
-      number,
-      number
-    ] => {
-      const maxLookahead = Math.max(
-        sourceTokens.length - sourceIndex + 1,
-        attemptTokens.length - attemptIndex + 1
-      )
-      for (let i = 1; i < maxLookahead; i++) {
-        // Dropped words
-        for (let j = 0; j < i; j++) {
-          if (isOptional(sourceTokens[sourceIndex + i])) {
-            break
-          }
-          if (
-            findMatch(
-              sourceTokens,
-              sourceIndex + i,
-              attemptTokens,
-              attemptIndex + j
-            )[0]
-          ) {
-            return mergeErrors(
-              sourceTokens,
-              sourceIndex,
-              i,
-              attemptTokens,
-              attemptIndex,
-              j
-            )
-          }
-        }
-
-        // Added words
-        for (let j = 0; j < i; j++) {
-          if (
-            findMatch(
-              sourceTokens,
-              sourceIndex + j,
-              attemptTokens,
-              attemptIndex + i
-            )[0]
-          ) {
-            return mergeErrors(
-              sourceTokens,
-              sourceIndex,
-              j,
-              attemptTokens,
-              attemptIndex,
-              i
-            )
-          }
-        }
-
-        // Wrong word 1-to-1
-        if (
-          findMatch(
-            sourceTokens,
-            sourceIndex + i,
-            attemptTokens,
-            attemptIndex + i
-          )[0]
-        ) {
-          return mergeErrors(
-            sourceTokens,
-            sourceIndex,
-            i,
-            attemptTokens,
-            attemptIndex,
-            i
-          )
-        }
-      }
-      /* istanbul ignore next */
-      throw 'Unreachable code'
-    })()
-    errors.push(...newErrors)
-    sourceIndex += sourceIndexIncrease
-    attemptIndex += attemptIndexIncrease
+    this.dictationText = dictationText
+    this.results = results
+    this.attempt = attempt
   }
-  return errors
+
+  attempt = ''
+  dictationText: DictationText | null = null
+  results: Transcription
+
+  /* Number of mistakes made. */
+  get errors(): TranscriptionError[] {
+    return this.results.filter(x => 'type' in x) as TranscriptionError[]
+  }
+
+  /* Number of correct responses, ignoring extra words. */
+  get correct() {
+    return this.results.length - this.errors.length
+  }
+
+  /* Score out of 100 with errors deducted */
+  get score() {
+    const perfectScore = this.dictationText?.perfectScore
+    if (!perfectScore) return -1
+    return ((1 - this.errors.length / perfectScore) * 100).toFixed(2)
+  }
+
+  /* How much of the text was caught, regardless of errors? */
+  get accuracy() {
+    const matches = this.results.filter(result => {
+      if ('type' in result) {
+        switch (result.type) {
+          case 'apostrophe':
+            return true
+          case 'capitalization':
+            return true
+          case 'collapsed contraction':
+            return true
+          case 'expanded contraction':
+            return true
+          case 'extra space':
+            return true
+          case 'no space':
+            return true
+          case 'transposition':
+            return true
+        }
+        // Dropped and extra words shouldn't count towards accuracy.
+        return false
+      }
+      return true // Not an error.
+    })
+    const perfectScore = this.dictationText?.perfectScore
+    if (!perfectScore) return -1
+    return ((matches.length / perfectScore) * 100).toFixed(2)
+  }
+
+  get stats() {
+    return {
+      score: this.score,
+      accuracy: this.accuracy,
+      errors: this.errors.length,
+      correct: this.correct,
+      possible: this.dictationText?.perfectScore
+    }
+  }
+
+  toString() {
+    return this.results
+      .map(result => {
+        if (!('type' in result)) return result.actual
+        const expected = result.expected
+          ? result.expected
+              .split('')
+              .map(x => `${x}\u0336`)
+              .join('')
+          : ''
+        const actual = result.actual
+          ? result.actual
+              .split('')
+              .map(x => `${x}\u0332`)
+              .join('')
+          : ''
+        return [expected, actual].filter(x => x).join(' ')
+      })
+      .join(' ')
+  }
 }
 
-export default countErrors
+class DictationText {
+  constructor(sourceText: string) {
+    this.sourceText = sourceText
+    this.sourceTokens = tokenizeString(sourceText)
+  }
+
+  sourceText = ''
+  sourceTokens: string[]
+
+  get perfectScore(): number {
+    // Filter out optionals in order to give those as bonus points.
+    return this.sourceTokens.filter(token => {
+      if (!token.startsWith('{')) return true // Not optional.
+      if (token.includes('|')) return true // Alternative spelling (still required.)
+      return false // Optional word or space.
+    }).length
+  }
+
+  grade(attempt: string): Grade {
+    const sourceTokens = this.sourceTokens
+    const attemptTokens = tokenizeString(attempt)
+    const matches = []
+    let sourceIndex = 0
+    let attemptIndex = 0
+    while (
+      sourceIndex < sourceTokens.length ||
+      attemptIndex < attemptTokens.length
+    ) {
+      const currentSource = sourceTokens[sourceIndex]
+      const currentAttempt = attemptTokens[attemptIndex]
+
+      if (currentSource === undefined) {
+        matches.push(
+          makeError(
+            'unexpected',
+            sourceTokens,
+            sourceIndex,
+            attemptTokens,
+            attemptIndex
+          )
+        )
+        attemptIndex += 1
+        continue
+      }
+      if (currentAttempt === undefined) {
+        if (!isOptional(currentSource)) {
+          matches.push(
+            makeError(
+              'dropped',
+              sourceTokens,
+              sourceIndex,
+              attemptTokens,
+              attemptIndex
+            )
+          )
+        }
+        sourceIndex += 1
+        continue
+      }
+
+      const [
+        matched,
+        matchResult,
+        matchSourceIncrease,
+        matchAttemptIncrease
+      ] = findMatch(
+        sourceTokens,
+        sourceIndex,
+        attemptTokens,
+        attemptIndex,
+        true
+      )
+
+      if (matched) {
+        if (matchResult) {
+          matches.push(matchResult)
+        }
+        sourceIndex += matchSourceIncrease
+        attemptIndex += matchAttemptIncrease
+        continue
+      }
+
+      const [newErrors, sourceIndexIncrease, attemptIndexIncrease] = ((): [
+        TranscriptionError[],
+        number,
+        number
+      ] => {
+        const maxLookahead = Math.max(
+          sourceTokens.length - sourceIndex + 1,
+          attemptTokens.length - attemptIndex + 1
+        )
+        for (let i = 1; i < maxLookahead; i++) {
+          // Dropped words
+          for (let j = 0; j <= i; j++) {
+            if (
+              // Look from attempt up to source
+              findMatch(
+                sourceTokens,
+                sourceIndex + i,
+                attemptTokens,
+                attemptIndex + j
+              )[0]
+            ) {
+              return mergeErrors(
+                sourceTokens,
+                sourceIndex,
+                i,
+                attemptTokens,
+                attemptIndex,
+                j
+              )
+            }
+            if (i === j) continue
+            if (
+              // Look from source down to attempt
+              findMatch(
+                sourceTokens,
+                sourceIndex + j,
+                attemptTokens,
+                attemptIndex + i
+              )[0]
+            ) {
+              return mergeErrors(
+                sourceTokens,
+                sourceIndex,
+                j,
+                attemptTokens,
+                attemptIndex,
+                i
+              )
+            }
+          }
+        }
+        /* istanbul ignore next */
+        throw 'Unreachable code'
+      })()
+      matches.push(...newErrors)
+      sourceIndex += sourceIndexIncrease
+      attemptIndex += attemptIndexIncrease
+    }
+    return new Grade(this, matches, attempt)
+  }
+}
+
+export default DictationText

@@ -1,4 +1,9 @@
-import errorCount from '../src/dictation-grader'
+import DictationText from '../src/dictation-grader'
+
+const errorCount = (source: string) => {
+  const dictation = new DictationText(source)
+  return (attempt: string): Array<unknown> => dictation.grade(attempt).errors
+}
 
 describe('errorCount', () => {
   it('should count extra / missing space as an error', () => {
@@ -73,6 +78,13 @@ describe('errorCount', () => {
       errorCount('I cannot know what you want')("I can't know what you want")
     ).toHaveLength(1)
   })
+  it('should work with acronyms', () => {
+    const usa = errorCount(
+      'I use an {RNG|R.N.G.} and I live in the {USA|U.S.A.}{.}'
+    )
+    expect(usa('I use an RNG and I live in the USA.')).toHaveLength(0)
+    expect(usa('I use an R.N.G. and I live in the U.S.A.')).toHaveLength(0)
+  })
   it('should handle optional tokens', () => {
     const oxfordComma = errorCount('This, that{,} and the other thing')
     expect(oxfordComma('This, that, and the other thing')).toHaveLength(0)
@@ -83,6 +95,22 @@ describe('errorCount', () => {
     expect(optionalWord('weird option word')).toHaveLength(1)
     expect(optionalWord('wired optional word')).toHaveLength(1)
     expect(optionalWord('wired option word')).toHaveLength(2)
+  })
+  it('should handle a wrong-ordered list without choking', () => {
+    const oxfordComma = errorCount(
+      'This sentence list many things: alligators, marsupials{,} and balloons all over the world. All fair things, right?'
+    )
+    expect(
+      oxfordComma(
+        'This sentence list many things: alligators, balloons, and marsupials all over the world. All fair things, right?'
+      )
+    ).toHaveLength(2)
+    expect(
+      // This one is problematic: it looks like marsupials is dropped, "and balloons" got transposed, and then marsupials is added.
+      oxfordComma(
+        'This sentence list many things: alligators, balloons and marsupials all over the world. All fair things, right?'
+      )
+    ).toHaveLength(3)
   })
   it('should handle incorrect apostrophes', () => {
     expect(errorCount("okay let's go")('okay lets go')).toHaveLength(1)
@@ -111,24 +139,25 @@ describe('errorCount', () => {
     ).toHaveLength(3)
   })
 
-  it('should handle a real-world example', () => {
-    console.log(
-      JSON.stringify(
-        errorCount(
-          'Bingo is a popular game played for money in the UK. Bingo nights are held in church halls, pubs, and clubs all over the country. To play the game, you have to buy one or more cards with numbers printed on them. The game is run by a caller whose job it is to call out the numbers and check winning tickets. The caller will usually say "eyes down" to indicate that he or she is about to start. They then call the numbers as they are randomly selected, either by an electronic random number generator, RNG, by drawing counters from a bag, or by using balls in a mechanical drawer machine. The numbers are called out clearly, for example, "both the 5s, 55" or "2 and 3, twenty-three". Some numbers have been given nicknames. For example, two fat ladies, which is the number 88. Players cross out the numbers on their card as they are called out. The first player to mark off all their numbers shouts "bingo" and is the winner.'
-        )(
-          'Bingo is a popular game played for money in the UK. Bingo nights are held in church halls, clubs, and pubs all over the country. To play the game, you have to buy one or more cards with numbers printed on them. The game is run by a caller whose job it is to call out the numbers and check winning tickets. The caller will usually say "ice down" to indicate that he or she is about to start. They then call the numbers as they are randomly selected either by an electronic number generator, RNG, or by using balls in a mechanical drawer machine. The numbers are called out clearly, for example, both the 5s, 55. Or two and three, twenty-three. Some numbers have been given nicknames, for example, two fat ladies which is the number 88. Players cross out the numbers on their cards. First playing to cross out all their numbers shouts "bingo" and is the winner.'
-        ),
-        null,
-        2
-      )
-    )
+  it('should work with quotes', () => {
     expect(
       errorCount(
-        'Bingo is a popular game played for money in the UK. Bingo nights are held in church halls, pubs, and clubs all over the country. To play the game, you have to buy one or more cards with numbers printed on them. The game is run by a caller whose job it is to call out the numbers and check winning tickets. The caller will usually say "eyes down" to indicate that he or she is about to start. They then call the numbers as they are randomly selected, either by an electronic random number generator, RNG, by drawing counters from a bag, or by using balls in a mechanical drawer machine. The numbers are called out clearly, for example, "both the 5s, 55" or "2 and 3, twenty-three". Some numbers have been given nicknames. For example, two fat ladies, which is the number 88. Players cross out the numbers on their card as they are called out. The first player to mark off all their numbers shouts "bingo" and is the winner.'
+        'The caller will usually say "eyes down" to indicate that he or she is about to start.'
       )(
-        'Bingo is a popular game played for money in the UK. Bingo nights are held in church halls, clubs, and pubs all over the country. To play the game, you have to buy one or more cards with numbers printed on them. The game is run by a caller whose job it is to call out the numbers and check winning tickets. The caller will usually say "ice down" to indicate that he or she is about to start. They then call the numbers as they are randomly selected either by an electronic number generator, RNG, or by using balls in a mechanical drawer machine. The numbers are called out clearly, for example, both the 5s, 55. Or two and three, twenty-three. Some numbers have been given nicknames, for example, two fat ladies which is the number 88. Players cross out the numbers on their cards. First playing to cross out all their numbers shouts "bingo" and is the winner.'
+        'The caller will usually say "ice down" to indicate that he or she is about to start.'
       )
-    ).toHaveLength(50)
+    ).toHaveLength(1)
+  })
+
+  it('should handle a real-world example', () => {
+    const bingo = new DictationText(
+      'Bingo is a popular game played for money in the {UK|U.K.}{.} Bingo nights are held in church halls, pubs{,} and clubs all over the country. To play the game, you have to buy one or more cards with numbers printed on them. The game is run by a caller whose job it is to call out the numbers and check winning tickets. The caller will usually say "eyes down" to indicate that he or she is about to start. They then call the numbers as they are randomly selected, either by an electronic random number generator, {RNG|R.N.G.}, by drawing counters from a bag, or by using balls in a mechanical drawer machine. The numbers are called out clearly. For example, "both the 5s, 55" or "2 and 3, twenty-three". Some numbers have been given nicknames, for example, "two fat ladies", which is the number 88. Players cross out the numbers on their card as they are called out. The first player to mark off all their numbers shouts "bingo!" and is the winner.'
+    )
+    const grade = bingo.grade(
+      'Bingo is a popular game that everyone loves that is played for money in the UK. Bingo nights are held in church halls, clubs, and pubs all over the country. To play the game, you have to buy one or more cards with numbers printed on them. The game is run by a caller whose job it is to call out the numbers and check winning tickets. The caller will usually say "ice down" to indicate that he or she is about to start. They then call the numbers as they are randomly selected either by an electronic number generator, RNG, or by using balls in a mechanical drawer machine. The numbers are called out clearly, for example, both the 5s, 55. Or two and three, twenty-three. Some numbers have been given nicknames, for example, two fat ladies which is the number 88. Players cross out the numbers on their cards. First playing to cross out all their numbers shouts "bingo" and is the winner.'
+    )
+    //console.log(JSON.stringify(grade.results, null, 2))
+    console.log(grade.toString())
+    expect(grade.stats).toEqual({})
   })
 })
