@@ -82,10 +82,33 @@ describe('errorCount', () => {
     expect(optionalWord('weird optional word')).toHaveLength(0)
     expect(optionalWord('weird option word')).toHaveLength(1)
     expect(optionalWord('wired optional word')).toHaveLength(1)
+    expect(optionalWord('wired option word')).toHaveLength(2)
   })
   it('should handle incorrect apostrophes', () => {
     expect(errorCount("okay let's go")('okay lets go')).toHaveLength(1)
     expect(errorCount('okay lets go')("okay let's go")).toHaveLength(1)
+  })
+
+  it('should handle optional space', () => {
+    const optionalSpace = errorCount('take me to the ball{ }park')
+    expect(optionalSpace('take me to the ballpark')).toHaveLength(0)
+    expect(optionalSpace('take me to the ball park')).toHaveLength(0)
+    expect(optionalSpace('take me to the boll park')).toHaveLength(1)
+  })
+
+  it('should handle alternative spellings', () => {
+    const alternativeSpellings = errorCount(
+      'it is my {favorite|favourite} toy.'
+    )
+    expect(alternativeSpellings('it is my favorite toy.')).toHaveLength(0)
+    expect(alternativeSpellings('it is my favourite toy.')).toHaveLength(0)
+    expect(alternativeSpellings('it is my favorit toy.')).toHaveLength(1)
+  })
+
+  it('should handle a mix of dropped words and a transposition', () => {
+    expect(
+      errorCount('I have been badly hurt')('I was very hurt badly')
+    ).toHaveLength(3)
   })
 
   it('should handle a real-world example', () => {

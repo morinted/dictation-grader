@@ -52,3 +52,7 @@ Note that numbers will not be graded in the same way as NCRA outlines, as their 
 ## Possible Uses
 
 This library could be used by any JavaScript front-end. It could obviously be used to grade dictation practice, but it could also serve as the basis for a less strict typing website.
+
+## TODO
+
+- Remove optionals from consideration on incorrect / dropped words.
